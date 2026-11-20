@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: tar.gz
+            bin: isa-audit
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: tar.gz
+            bin: isa-audit
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: zip
+            bin: isa-audit.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Run tests
+        run: cargo test
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package Unix archive
+        if: matrix.ext == 'tar.gz'
+        shell: bash
+        run: |
+          stage="isa-audit-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$stage/"
+          cp README.md LICENSE "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+      - name: Package Windows archive
+        if: matrix.ext == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "isa-audit-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$stage/"
+          Copy-Item README.md, LICENSE "$stage/"
+          Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: isa-audit-*.${{ matrix.ext }}
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate SHA-256 checksums
+        working-directory: dist
+        run: sha256sum isa-audit-* > SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "isa-audit ${GITHUB_REF_NAME}" \
+            --generate-notes
