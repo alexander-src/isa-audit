@@ -1,14 +1,13 @@
 use std::fs;
 use std::process::Command;
 
-/// Minimal valid x86-64 ELF64 binary with one AVX instruction (`vaddps`) and one `ret`.
-fn build_minimal_avx_elf() -> Vec<u8> {
-    let text = [0xc5, 0xf4, 0x58, 0xc2, 0xc3];
+/// Minimal valid x86-64 ELF64 binary with the supplied `.text` instruction bytes.
+fn build_minimal_elf(text: &[u8]) -> Vec<u8> {
     let text_vaddr: u64 = 0x401000;
     let mut buf = vec![0u8; 64];
 
     let text_off = buf.len() as u64;
-    buf.extend_from_slice(&text);
+    buf.extend_from_slice(text);
 
     let shstrtab_off = buf.len() as u64;
     let shstrtab = b"\0.text\0.shstrtab\0";
@@ -60,7 +59,8 @@ fn build_minimal_avx_elf() -> Vec<u8> {
 fn cli_exits_0_on_pass_1_on_policy_violation_and_2_on_error() {
     let bin = env!("CARGO_BIN_EXE_isa-audit");
     let fixture = std::env::temp_dir().join(format!("isa_audit_cli_{}.elf", std::process::id()));
-    fs::write(&fixture, build_minimal_avx_elf()).expect("write ELF fixture");
+    fs::write(&fixture, build_minimal_elf(&[0xc5, 0xf4, 0x58, 0xc2, 0xc3]))
+        .expect("write ELF fixture");
 
     // 1. AVX fixture passes avx-no-fma (exit code 0)
     let pass = Command::new(bin)
@@ -109,6 +109,92 @@ fn cli_exits_0_on_pass_1_on_policy_violation_and_2_on_error() {
     assert_eq!(err.status.code(), Some(2));
 
     let _ = fs::remove_file(&fixture);
+}
+
+#[test]
+fn cli_diff_detects_isa_lowering_and_regressions() {
+    let bin = env!("CARGO_BIN_EXE_isa-audit");
+    let pid = std::process::id();
+    let avx_only = std::env::temp_dir().join(format!("isa_audit_diff_avx_{pid}.elf"));
+    let avx_fma = std::env::temp_dir().join(format!("isa_audit_diff_fma_{pid}.elf"));
+
+    // vaddps xmm0, xmm1, xmm2; ret
+    fs::write(
+        &avx_only,
+        build_minimal_elf(&[0xc5, 0xf4, 0x58, 0xc2, 0xc3]),
+    )
+    .expect("write avx fixture");
+    // vfmadd213ps xmm0, xmm1, xmm2; vaddps xmm0, xmm1, xmm2; ret
+    fs::write(
+        &avx_fma,
+        build_minimal_elf(&[0xc4, 0xe2, 0x71, 0xa8, 0xc2, 0xc5, 0xf4, 0x58, 0xc2, 0xc3]),
+    )
+    .expect("write fma fixture");
+
+    // 1. Removing FMA3 (lowering pass): passes --fail-on-regression
+    let lowered = Command::new(bin)
+        .args([
+            "diff",
+            avx_fma.to_str().unwrap(),
+            avx_only.to_str().unwrap(),
+            "--format",
+            "json",
+            "--fail-on-regression",
+        ])
+        .output()
+        .expect("run isa-audit diff lowering");
+    assert_eq!(lowered.status.code(), Some(0));
+    let out = String::from_utf8_lossy(&lowered.stdout);
+    assert!(out.contains("\"regressed\": false"));
+    assert!(out.contains("\"removed_features\": [\"fma3\"]"));
+    assert!(out.contains("\"before_min_profile\": \"x86-64-v3\""));
+    assert!(out.contains("\"after_min_profile\": \"avx-no-fma\""));
+
+    // 2. Adding FMA3 (regression): fails --fail-on-regression with exit code 1
+    let regressed = Command::new(bin)
+        .args([
+            "diff",
+            avx_only.to_str().unwrap(),
+            avx_fma.to_str().unwrap(),
+            "--format",
+            "json",
+            "--fail-on-regression",
+        ])
+        .output()
+        .expect("run isa-audit diff regression");
+    assert_eq!(regressed.status.code(), Some(1));
+    let reg_out = String::from_utf8_lossy(&regressed.stdout);
+    assert!(reg_out.contains("\"regressed\": true"));
+    assert!(reg_out.contains("\"added_features\": [\"fma3\"]"));
+
+    // 3. Text diff format and unsupported sarif format
+    let text = Command::new(bin)
+        .args([
+            "diff",
+            avx_only.to_str().unwrap(),
+            avx_fma.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run isa-audit diff text");
+    assert_eq!(text.status.code(), Some(0));
+    let text_out = String::from_utf8_lossy(&text.stdout);
+    assert!(text_out.contains("avx-no-fma -> x86-64-v3"));
+    assert!(text_out.contains("ADDED"));
+
+    let bad_fmt = Command::new(bin)
+        .args([
+            "diff",
+            avx_only.to_str().unwrap(),
+            avx_fma.to_str().unwrap(),
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .expect("run isa-audit diff bad format");
+    assert_eq!(bad_fmt.status.code(), Some(2));
+
+    let _ = fs::remove_file(&avx_only);
+    let _ = fs::remove_file(&avx_fma);
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

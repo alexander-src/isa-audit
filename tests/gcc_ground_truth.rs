@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use isa_audit::analyzer::{audit_binary, AuditOptions};
+use isa_audit::analyzer::{audit_binary, diff_reports, AuditOptions};
 use isa_audit::elf::ElfBinary;
 use isa_audit::isa::{IsaFeature, TargetProfile};
 use isa_audit::report::{render_json, render_sarif};
@@ -242,4 +242,36 @@ extern "C" uint64_t aes_popcnt_kernel(const __m128i* a, const __m128i* k, __m128
             .unwrap_or(0)
             > 0
     );
+}
+
+#[test]
+fn gcc_ground_truth_diff_tracks_fma3_lowering_and_regression() {
+    if !has_gxx() {
+        eprintln!("skipping gcc_ground_truth diff: g++ not available on PATH");
+        return;
+    }
+
+    let kernel = r#"
+extern "C" void saxpy(const float* __restrict a, const float* __restrict b, float* __restrict out, int n) {
+    for (int i = 0; i < n; ++i) out[i] = a[i] * b[i] + out[i];
+}
+"#;
+    let obj_avx = compile_kernel("diff_avx", kernel, &["-mavx", "-mno-avx2", "-mno-fma"]);
+    let obj_fma = compile_kernel("diff_fma", kernel, &["-mavx", "-mfma", "-mno-avx2"]);
+
+    let raw_avx = fs::read(&obj_avx).unwrap();
+    let raw_fma = fs::read(&obj_fma).unwrap();
+    let elf_avx = ElfBinary::parse(&raw_avx).unwrap();
+    let elf_fma = ElfBinary::parse(&raw_fma).unwrap();
+
+    let rep_avx = audit_binary("saxpy_avx.o", &elf_avx, &AuditOptions::default());
+    let rep_fma = audit_binary("saxpy_fma.o", &elf_fma, &AuditOptions::default());
+
+    let reg = diff_reports(&rep_avx, &rep_fma);
+    assert!(reg.has_regression());
+    assert!(reg.added_features.contains(&IsaFeature::Fma3));
+
+    let lowered = diff_reports(&rep_fma, &rep_avx);
+    assert!(!lowered.has_regression());
+    assert!(lowered.removed_features.contains(&IsaFeature::Fma3));
 }

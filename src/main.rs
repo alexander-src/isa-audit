@@ -7,10 +7,12 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Instant;
 
-use isa_audit::analyzer::{audit_binary, AuditOptions};
+use isa_audit::analyzer::{audit_binary, diff_reports, AuditOptions};
 use isa_audit::elf::ElfBinary;
 use isa_audit::isa::{parse_feature_list, IsaFeature, TargetProfile};
-use isa_audit::report::{render_json, render_sarif, render_text, ReportFormat};
+use isa_audit::report::{
+    render_diff_json, render_diff_text, render_json, render_sarif, render_text, ReportFormat,
+};
 
 fn usage() -> &'static str {
     "\
@@ -21,6 +23,8 @@ USAGE:
   isa-audit check <binary> [--target PROFILE] [--forbid FEAT,...]
                            [--format text|json|sarif] [--section NAME]
                            [--max-findings N] [--top N]
+  isa-audit diff  <before> <after> [--format text|json] [--section NAME]
+                           [--fail-on-regression]
   isa-audit bench <binary> [--iterations N]
 
 PROFILES:
@@ -31,8 +35,8 @@ PROFILES:
   x86-64-v4   v3 + AVX-512F/VL/BW/DQ
 
 EXIT CODES:
-  0  Scan succeeded / binary complies with ISA policy
-  1  Policy check failed (forbidden instructions found)
+  0  Scan succeeded / binary complies with ISA policy / no ISA regression
+  1  Policy check failed or --fail-on-regression detected newly added ISA extensions
   2  CLI argument, I/O, or ELF parse error
 "
 }
@@ -149,6 +153,77 @@ fn run() -> Result<ExitCode, String> {
             print!("{rendered}");
 
             if cmd == "check" && !report.passed() {
+                Ok(ExitCode::from(1))
+            } else {
+                Ok(ExitCode::SUCCESS)
+            }
+        }
+        "diff" => {
+            let mut paths: Vec<String> = Vec::new();
+            let mut format = ReportFormat::Text;
+            let mut section_filter: Option<String> = None;
+            let mut fail_on_regression = false;
+
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--format" | "-f" => {
+                        let v = next_arg(&args, &mut i, "--format")?;
+                        format = parse_format(&v)?;
+                    }
+                    "--section" | "-s" => {
+                        section_filter = Some(next_arg(&args, &mut i, "--section")?);
+                    }
+                    "--fail-on-regression" => {
+                        fail_on_regression = true;
+                    }
+                    flag if flag.starts_with('-') => {
+                        return Err(format!("unknown flag '{flag}'"));
+                    }
+                    positional => {
+                        if paths.len() >= 2 {
+                            return Err(format!("unexpected positional argument '{positional}'"));
+                        }
+                        paths.push(positional.to_string());
+                    }
+                }
+                i += 1;
+            }
+
+            if paths.len() != 2 {
+                return Err("diff requires two arguments: <before> <after>".to_string());
+            }
+            if format == ReportFormat::Sarif {
+                return Err("diff supports --format text or json (not sarif)".to_string());
+            }
+
+            let before_path = &paths[0];
+            let after_path = &paths[1];
+            let before_raw = fs::read(before_path)
+                .map_err(|e| format!("failed to read '{before_path}': {e}"))?;
+            let after_raw =
+                fs::read(after_path).map_err(|e| format!("failed to read '{after_path}': {e}"))?;
+            let before_elf = ElfBinary::parse(&before_raw)
+                .map_err(|e| format!("failed to parse ELF '{before_path}': {e}"))?;
+            let after_elf = ElfBinary::parse(&after_raw)
+                .map_err(|e| format!("failed to parse ELF '{after_path}': {e}"))?;
+
+            let opts = AuditOptions {
+                section_filter,
+                ..AuditOptions::default()
+            };
+            let before_rep = audit_binary(before_path, &before_elf, &opts);
+            let after_rep = audit_binary(after_path, &after_elf, &opts);
+            let diff = diff_reports(&before_rep, &after_rep);
+
+            let rendered = match format {
+                ReportFormat::Text => render_diff_text(&diff),
+                ReportFormat::Json => render_diff_json(&diff),
+                ReportFormat::Sarif => unreachable!(),
+            };
+            print!("{rendered}");
+
+            if fail_on_regression && diff.has_regression() {
                 Ok(ExitCode::from(1))
             } else {
                 Ok(ExitCode::SUCCESS)
