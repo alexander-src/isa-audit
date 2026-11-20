@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::analyzer::AuditReport;
+use crate::analyzer::{AuditReport, DiffReport};
 use crate::isa::IsaFeature;
 
 /// Output report format.
@@ -246,5 +246,136 @@ pub fn render_sarif(report: &AuditReport) -> String {
     }
 
     out.push_str("      ]\n    }\n  ]\n}\n");
+    out
+}
+
+/// Renders a human-readable terminal diff between two audited binaries.
+pub fn render_diff_text(diff: &DiffReport) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "isa-audit diff:");
+    let _ = writeln!(
+        out,
+        "  before        : {} ({}, {} instructions)",
+        diff.before_path, diff.before_min_profile, diff.before_instructions
+    );
+    let _ = writeln!(
+        out,
+        "  after         : {} ({}, {} instructions)",
+        diff.after_path, diff.after_min_profile, diff.after_instructions
+    );
+    let _ = writeln!(
+        out,
+        "  min-profile   : {} -> {}",
+        diff.before_min_profile, diff.after_min_profile
+    );
+
+    if !diff.added_features.is_empty() {
+        let added: Vec<&str> = diff.added_features.iter().map(|f| f.label()).collect();
+        let _ = writeln!(out, "  added         : {}", added.join(", "));
+    }
+    if !diff.removed_features.is_empty() {
+        let removed: Vec<&str> = diff.removed_features.iter().map(|f| f.label()).collect();
+        let _ = writeln!(out, "  removed       : {}", removed.join(", "));
+    }
+
+    let _ = writeln!(out, "\nISA Feature Deltas:");
+    let _ = writeln!(
+        out,
+        "  {:<18} {:>10} {:>10} {:>11}   STATUS",
+        "FEATURE", "BEFORE", "AFTER", "DELTA"
+    );
+    let _ = writeln!(out, "  {}", "-".repeat(62));
+
+    for row in &diff.deltas {
+        let status = if diff.added_features.contains(&row.feature) {
+            "ADDED"
+        } else if diff.removed_features.contains(&row.feature) {
+            "REMOVED"
+        } else if row.delta != 0 {
+            "changed"
+        } else {
+            "same"
+        };
+        let _ = writeln!(
+            out,
+            "  {:<18} {:>10} {:>10} {:>+11}   {}",
+            row.feature.label(),
+            row.before,
+            row.after,
+            row.delta,
+            status
+        );
+    }
+
+    out
+}
+
+/// Renders a strict RFC 8259 JSON diff report.
+pub fn render_diff_json(diff: &DiffReport) -> String {
+    let mut out = String::new();
+    out.push_str("{\n");
+    let _ = writeln!(out, "  \"tool\": \"isa-audit\",");
+    let _ = writeln!(out, "  \"version\": \"{}\",", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(out, "  \"mode\": \"diff\",");
+    let _ = writeln!(
+        out,
+        "  \"before_path\": {},",
+        json_escape(&diff.before_path)
+    );
+    let _ = writeln!(out, "  \"after_path\": {},", json_escape(&diff.after_path));
+    let _ = writeln!(
+        out,
+        "  \"before_min_profile\": {},",
+        json_escape(diff.before_min_profile)
+    );
+    let _ = writeln!(
+        out,
+        "  \"after_min_profile\": {},",
+        json_escape(diff.after_min_profile)
+    );
+    let _ = writeln!(
+        out,
+        "  \"before_instructions\": {},",
+        diff.before_instructions
+    );
+    let _ = writeln!(
+        out,
+        "  \"after_instructions\": {},",
+        diff.after_instructions
+    );
+    let _ = writeln!(out, "  \"regressed\": {},", diff.has_regression());
+
+    out.push_str("  \"added_features\": [");
+    for (idx, feat) in diff.added_features.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&json_escape(feat.id()));
+    }
+    out.push_str("],\n");
+
+    out.push_str("  \"removed_features\": [");
+    for (idx, feat) in diff.removed_features.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&json_escape(feat.id()));
+    }
+    out.push_str("],\n");
+
+    out.push_str("  \"deltas\": [\n");
+    for (idx, row) in diff.deltas.iter().enumerate() {
+        let comma = if idx + 1 < diff.deltas.len() { "," } else { "" };
+        let _ = writeln!(
+            out,
+            "    {{\"feature\": {}, \"before\": {}, \"after\": {}, \"delta\": {}}}{comma}",
+            json_escape(row.feature.id()),
+            row.before,
+            row.after,
+            row.delta
+        );
+    }
+    out.push_str("  ]\n");
+    out.push_str("}\n");
     out
 }

@@ -70,6 +70,78 @@ impl AuditReport {
     }
 }
 
+/// Per-feature instruction count delta between two audited binaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureDelta {
+    pub feature: IsaFeature,
+    pub before: u64,
+    pub after: u64,
+    pub delta: i64,
+}
+
+/// Comparison of ISA extension usage between a baseline (`before`) and updated (`after`) binary.
+#[derive(Debug, Clone)]
+pub struct DiffReport {
+    pub before_path: String,
+    pub after_path: String,
+    pub before_min_profile: &'static str,
+    pub after_min_profile: &'static str,
+    pub before_instructions: u64,
+    pub after_instructions: u64,
+    pub deltas: Vec<FeatureDelta>,
+    pub added_features: BTreeSet<IsaFeature>,
+    pub removed_features: BTreeSet<IsaFeature>,
+}
+
+impl DiffReport {
+    /// Returns true if `after` introduces at least one non-baseline ISA extension absent in `before`.
+    pub fn has_regression(&self) -> bool {
+        !self.added_features.is_empty()
+    }
+}
+
+/// Compares two audit reports and computes per-feature deltas and ISA regressions.
+pub fn diff_reports(before: &AuditReport, after: &AuditReport) -> DiffReport {
+    let mut keys: BTreeSet<IsaFeature> = BTreeSet::new();
+    keys.extend(before.feature_counts.keys().copied());
+    keys.extend(after.feature_counts.keys().copied());
+
+    let mut deltas = Vec::with_capacity(keys.len());
+    let mut added_features = BTreeSet::new();
+    let mut removed_features = BTreeSet::new();
+
+    for feature in keys {
+        let before_count = before.feature_counts.get(&feature).copied().unwrap_or(0);
+        let after_count = after.feature_counts.get(&feature).copied().unwrap_or(0);
+        let delta = after_count as i64 - before_count as i64;
+        if feature != IsaFeature::Baseline {
+            if before_count == 0 && after_count > 0 {
+                added_features.insert(feature);
+            } else if before_count > 0 && after_count == 0 {
+                removed_features.insert(feature);
+            }
+        }
+        deltas.push(FeatureDelta {
+            feature,
+            before: before_count,
+            after: after_count,
+            delta,
+        });
+    }
+
+    DiffReport {
+        before_path: before.path.clone(),
+        after_path: after.path.clone(),
+        before_min_profile: before.min_profile,
+        after_min_profile: after.min_profile,
+        before_instructions: before.total_instructions,
+        after_instructions: after.total_instructions,
+        deltas,
+        added_features,
+        removed_features,
+    }
+}
+
 /// Runs a full ISA audit over a parsed x86-64 ELF64 binary.
 pub fn audit_binary(
     path: impl Into<String>,
