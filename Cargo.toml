@@ -1,0 +1,18 @@
+[package]
+name = "isa-audit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Zero-dependency x86-64 ELF64 binary ISA feature auditor and CI verification gate"
+license = "MIT"
+repository = "https://github.com/alexander-src/isa-audit"
+homepage = "https://alexander-src.github.io/case-studies/isa-audit.html"
+keywords = ["x86-64", "elf", "isa", "avx", "binary-analysis"]
+categories = ["command-line-utilities", "development-tools::debugging"]
+
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
