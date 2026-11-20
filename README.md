@@ -16,11 +16,11 @@ Built for verifying portable release builds, binary relinkers, and instruction-l
 A single unlowered `vfmadd` or compiler-emitted `AVX2` instruction inside a rarely hit error path crashes older x86-64 CPUs with `SIGILL` in production. `isa-audit` statically scans every executable ELF section (`SHF_EXECINSTR`), resynchronizes on `STT_FUNC` symbol boundaries, classifies x86-64 instructions across legacy, REX, VEX2, VEX3, and EVEX encodings, and pinpoints offending sites with **section, virtual address, symbol+offset, and raw bytes**.
 
 ### Highlights
-- **Zero external crates** — compiles offline in ~1 second; stripped release binary is **427 KB**.
-- **100% safe Rust (`#![forbid(unsafe_code)]`)** — bounds-checked ELF64 parsing tested against byte-by-byte truncation and integer-overflow corruption.
-- **High throughput** — **259–282 MiB/s (~68–70 million instructions/sec)** single-threaded decode speed on real x86-64 binaries.
-- **CI-native output** — deterministic terminal tables, strict RFC 8259 **JSON**, and **SARIF 2.1.0** for GitHub Code Scanning, with semantic exit codes (`0` pass, `1` policy violation, `2` error).
-- **Compiler ground-truth verified** — integration suite compiles real C++ kernels via `g++` (`-mno-avx`, `-mavx -mno-fma`, `-mfma`, `-mavx2`, `-mbmi -mbmi2`, `-maes -mpopcnt`) and asserts exact ISA classification and symbol attribution.
+- **Zero external crates:** compiles offline in ~1 second; stripped release binary is **427 KB**.
+- **100% safe Rust (`#![forbid(unsafe_code)]`):** bounds-checked ELF64 parsing tested against byte-by-byte truncation and integer-overflow corruption.
+- **High throughput:** **259-282 MiB/s (~68-70 million instructions/sec)** single-threaded decode speed on real x86-64 binaries.
+- **CI-native output:** deterministic terminal tables, strict RFC 8259 **JSON**, and **SARIF 2.1.0** for GitHub Code Scanning, with semantic exit codes (`0` pass, `1` policy violation, `2` error).
+- **Compiler ground-truth verified:** integration suite compiles real C++ kernels via `g++` (`-mno-avx`, `-mavx -mno-fma`, `-mfma`, `-mavx2`, `-mbmi -mbmi2`, `-maes -mpopcnt`) and asserts exact ISA classification and symbol attribution.
 
 ---
 
@@ -89,12 +89,12 @@ Measured on Linux x86-64 (single-threaded release build, 100 iterations):
 
 ## Documentation
 
-- [`docs/SPEC.md`](docs/SPEC.md) — Formal specification and invariants
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — ELF64 parser, function-resynchronized scanner, and x86-64 decoder design
-- [`docs/AI_WORKFLOW.md`](docs/AI_WORKFLOW.md) — Engineering workflow and real bugs caught by compiler & `objdump` verification
+- [`docs/SPEC.md`](docs/SPEC.md): Formal specification and invariants
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): ELF64 parser, function-resynchronized scanner, and x86-64 decoder design
+- [`docs/AI_WORKFLOW.md`](docs/AI_WORKFLOW.md): Engineering workflow and real bugs caught by compiler & `objdump` verification
 
 ---
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

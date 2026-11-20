@@ -7,7 +7,7 @@ Before writing implementation code, [`docs/SPEC.md`](SPEC.md) locked down four i
 - `#![forbid(unsafe_code)]` across the entire crate.
 - Zero external crates (`Cargo.toml` `[dependencies]` empty).
 - Every ELF parse operation uses explicit checked arithmetic and slice bounds.
-- Verification requires **real compiled C++ binaries from `g++`** across distinct `-m*` ISA flags—not just hand-crafted unit test arrays.
+- Verification requires **real compiled C++ binaries from `g++`** across distinct `-m*` ISA flags, not just hand-crafted unit test arrays.
 
 ## 2. Real Bugs Caught by Deterministic Verification
 
@@ -22,7 +22,7 @@ Before writing implementation code, [`docs/SPEC.md`](SPEC.md) locked down four i
   ```asm
   test   %eax, %eax
   je     36582
-  tzcnt  %eax, %eax   ; F3 0F BC C0 — executes as `rep bsf` on pre-BMI1 CPUs
+  tzcnt  %eax, %eax   ; F3 0F BC C0, executes as `rep bsf` on pre-BMI1 CPUs
   ```
 - **Why it matters:** On pre-BMI1 CPUs, `F3 0F BC` executes as `REP BSF` without raising `#UD`/`SIGILL`, and produces identical output whenever the input is proven non-zero. Flagging it as hard-faulting `BMI1` produces false positives on virtually every Rust/LLVM baseline binary.
 - **Root-cause fix:** Reclassified `F3 0F BC` as `Baseline` (`tzcnt/rep-bsf`) so `isa-audit` strictly reports instructions capable of raising `SIGILL`, while continuing to flag VEX-encoded BMI1 instructions (`andn`, `blsr`, `blsmsk`, `blsi`, `bextr`). Added a regression test in `tests/decoder_unit.rs` and an end-to-end self-scan assertion in `tests/cli_integration.rs`.

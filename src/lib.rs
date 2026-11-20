@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! `isa-audit` — Zero-dependency x86-64 ELF64 binary ISA feature auditor and CI verification gate.
+//! `isa-audit`: Zero-dependency x86-64 ELF64 binary ISA feature auditor and CI verification gate.
 
 pub mod analyzer;
 pub mod decoder;

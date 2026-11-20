@@ -14,7 +14,7 @@ use isa_audit::report::{render_json, render_sarif, render_text, ReportFormat};
 
 fn usage() -> &'static str {
     "\
-isa-audit — x86-64 ELF64 binary ISA feature auditor & CI gate
+isa-audit: x86-64 ELF64 binary ISA feature auditor and CI gate
 
 USAGE:
   isa-audit scan  <binary> [--format text|json|sarif] [--section NAME] [--top N]

@@ -2,7 +2,7 @@
 
 ## 1. Problem Statement
 
-When building portable Linux binaries, binary relinkers, or instruction-lowering passes (e.g., lowering FMA3 or AVX2 down to baseline AVX or x86-64-v2 for older CPUs), a single accidental compiler-emitted or unlowered instruction causes `SIGILL` (Illegal Instruction) at runtime—often inside a rarely executed cold path that standard unit tests miss.
+When building portable Linux binaries, binary relinkers, or instruction-lowering passes (e.g., lowering FMA3 or AVX2 down to baseline AVX or x86-64-v2 for older CPUs), a single accidental compiler-emitted or unlowered instruction causes `SIGILL` (Illegal Instruction) at runtime, often inside a rarely executed cold path that standard unit tests miss.
 
 `isa-audit` is a standalone, zero-dependency static binary auditor and CI gate that scans x86-64 ELF64 executables and shared objects, decodes executable sections, classifies CPU ISA extensions, attributes offending instructions to symbols and virtual addresses, and fails CI if forbidden extensions appear.
 
