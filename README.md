@@ -26,6 +26,8 @@ A single unlowered `vfmadd` or compiler-emitted `AVX2` instruction inside a rare
 
 ## Quick Start
 
+Download a pre-built binary from [GitHub Releases](https://github.com/alexander-src/isa-audit/releases), or build from source in ~1 second:
+
 ```bash
 cargo build --release
 
@@ -34,6 +36,9 @@ cargo build --release
 
 # Enforce a microarchitecture policy in CI (e.g. verify FMA3 lowering to AVX)
 ./target/release/isa-audit check ./build/relinked_game --target avx-no-fma
+
+# Compare two builds or verify a binary lowering pass (exits 1 if new ISA extensions appear)
+./target/release/isa-audit diff ./build/before.elf ./build/after.elf --fail-on-regression
 
 # Forbid specific extensions and emit GitHub Code Scanning SARIF
 ./target/release/isa-audit check ./build/app --forbid fma3,avx2,avx512 --format sarif > isa.sarif
