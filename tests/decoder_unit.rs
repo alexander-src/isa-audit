@@ -203,3 +203,67 @@ fn rejects_malformed_vex_evex_and_truncated_sequences_without_panicking() {
         assert!(d.len as usize <= sample.len());
     }
 }
+
+#[test]
+fn decodes_sha_ni_vaes_and_vpclmulqdq() {
+    // sha1nexte xmm0, xmm1 (0f 38 c8 c1 = 4 bytes) -> SHA
+    let d = decode_one(&[0x0f, 0x38, 0xc8, 0xc1]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 4);
+    assert_eq!(d.feature, IsaFeature::Sha);
+    assert_eq!(d.mnemonic, "sha1nexte");
+
+    // sha256rnds2 xmm0, xmm1 (0f 38 cb c1 = 4 bytes) -> SHA
+    let d = decode_one(&[0x0f, 0x38, 0xcb, 0xc1]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 4);
+    assert_eq!(d.feature, IsaFeature::Sha);
+    assert_eq!(d.mnemonic, "sha256rnds2");
+
+    // sha1rnds4 xmm0, xmm1, 0 (0f 3a cc c1 00 = 5 bytes) -> SHA
+    let d = decode_one(&[0x0f, 0x3a, 0xcc, 0xc1, 0x00]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 5);
+    assert_eq!(d.feature, IsaFeature::Sha);
+    assert_eq!(d.mnemonic, "sha1rnds4");
+
+    // 128-bit VEX vaesenc xmm0, xmm1, xmm2 (c4 e2 71 dc c2 = 5 bytes, L=0) -> AES-NI
+    let d = decode_one(&[0xc4, 0xe2, 0x71, 0xdc, 0xc2]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 5);
+    assert_eq!(d.feature, IsaFeature::Aes);
+
+    // 256-bit VEX vaesenc ymm0, ymm1, ymm2 (c4 e2 75 dc c2 = 5 bytes, L=1) -> VAES
+    let d = decode_one(&[0xc4, 0xe2, 0x75, 0xdc, 0xc2]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 5);
+    assert_eq!(d.feature, IsaFeature::Vaes);
+    assert_eq!(d.mnemonic, "vaes-256");
+
+    // EVEX vaesenc zmm0, zmm1, zmm2 (62 f2 75 48 dc c2 = 6 bytes) -> VAES
+    let d = decode_one(&[0x62, 0xf2, 0x75, 0x48, 0xdc, 0xc2]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 6);
+    assert_eq!(d.feature, IsaFeature::Vaes);
+    assert_eq!(d.mnemonic, "vaes-evex");
+
+    // 128-bit VEX vpclmulqdq xmm0, xmm1, xmm2, 0 (c4 e3 71 44 c2 00 = 6 bytes, L=0) -> PCLMULQDQ
+    let d = decode_one(&[0xc4, 0xe3, 0x71, 0x44, 0xc2, 0x00]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 6);
+    assert_eq!(d.feature, IsaFeature::Pclmulqdq);
+
+    // 256-bit VEX vpclmulqdq ymm0, ymm1, ymm2, 0 (c4 e3 75 44 c2 00 = 6 bytes, L=1) -> VPCLMULQDQ
+    let d = decode_one(&[0xc4, 0xe3, 0x75, 0x44, 0xc2, 0x00]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 6);
+    assert_eq!(d.feature, IsaFeature::Vpclmulqdq);
+    assert_eq!(d.mnemonic, "vpclmulqdq-256");
+
+    // EVEX vpclmulqdq zmm0, zmm1, zmm2, 0 (62 f3 75 48 44 c2 00 = 7 bytes) -> VPCLMULQDQ
+    let d = decode_one(&[0x62, 0xf3, 0x75, 0x48, 0x44, 0xc2, 0x00]);
+    assert!(!d.invalid);
+    assert_eq!(d.len, 7);
+    assert_eq!(d.feature, IsaFeature::Vpclmulqdq);
+    assert_eq!(d.mnemonic, "vpclmulqdq-evex");
+}

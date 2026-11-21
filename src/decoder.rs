@@ -348,9 +348,18 @@ fn classify_vex(
                 _ => {}
             }
 
-            // AES-NI via VEX
-            if pp == 1 && matches!(opcode, 0xDB..=0xDF) {
-                return (IsaFeature::Aes, "vaes");
+            // AES-NI (128-bit VEX) vs VAES (256-bit VEX)
+            if pp == 1 {
+                if opcode == 0xDB {
+                    return (IsaFeature::Aes, "vaesimc");
+                }
+                if matches!(opcode, 0xDC..=0xDF) {
+                    return if l_256 {
+                        (IsaFeature::Vaes, "vaes-256")
+                    } else {
+                        (IsaFeature::Aes, "vaes-128")
+                    };
+                }
             }
 
             // AVX2-specific VEX.66.0F38 instructions (both 128-bit and 256-bit)
@@ -387,7 +396,11 @@ fn classify_vex(
                 return (IsaFeature::Aes, "vaeskeygenassist");
             }
             if pp == 1 && opcode == 0x44 {
-                return (IsaFeature::Pclmulqdq, "vpclmulqdq");
+                return if l_256 {
+                    (IsaFeature::Vpclmulqdq, "vpclmulqdq-256")
+                } else {
+                    (IsaFeature::Pclmulqdq, "vpclmulqdq-128")
+                };
             }
             if pp == 1 {
                 match opcode {
@@ -437,8 +450,13 @@ fn decode_evex(bytes: &[u8], pos: usize) -> DecodedInsn {
         _ => 0,
     };
 
+    let pp = p1 & 0x03;
     let ll = (p2 >> 5) & 0x03;
-    let (feature, mnemonic) = if ll == 0 || ll == 1 {
+    let (feature, mnemonic) = if map == 2 && pp == 1 && matches!(opcode, 0xDC..=0xDF) {
+        (IsaFeature::Vaes, "vaes-evex")
+    } else if map == 3 && pp == 1 && opcode == 0x44 {
+        (IsaFeature::Vpclmulqdq, "vpclmulqdq-evex")
+    } else if ll == 0 || ll == 1 {
         (IsaFeature::Avx512Vl, "avx512vl")
     } else if map == 2 && matches!(opcode, 0x00 | 0x04 | 0x1C..=0x1E | 0x7A..=0x7D) {
         (IsaFeature::Avx512Bw, "avx512bw")
@@ -544,7 +562,12 @@ fn decode_0f38(bytes: &[u8], pos: usize, pref: LegacyPrefixes) -> DecodedInsn {
         0xF0 | 0xF1 => (IsaFeature::Movbe, "movbe"),
         0xF6 if pref.has_66 || pref.last_rep == 0xF3 => (IsaFeature::Adx, "adcx/adox"),
         0xDB..=0xDF if pref.has_66 => (IsaFeature::Aes, "aes"),
-        0xC8..=0xCD => (IsaFeature::Sha, "sha"),
+        0xC8 if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha1nexte"),
+        0xC9 if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha1msg1"),
+        0xCA if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha1msg2"),
+        0xCB if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha256rnds2"),
+        0xCC if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha256msg1"),
+        0xCD if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha256msg2"),
         _ => (IsaFeature::Baseline, "x86-0f38"),
     };
 
@@ -566,7 +589,7 @@ fn decode_0f3a(bytes: &[u8], pos: usize, pref: LegacyPrefixes) -> DecodedInsn {
         0x08..=0x0E | 0x14..=0x17 | 0x20..=0x22 | 0x40..=0x42 => (IsaFeature::Sse41, "sse4.1"),
         0x44 if pref.has_66 => (IsaFeature::Pclmulqdq, "pclmulqdq"),
         0x60..=0x63 if pref.has_66 => (IsaFeature::Sse42, "pcmpstr"),
-        0xCC => (IsaFeature::Sha, "sha1rnds4"),
+        0xCC if !pref.has_66 && pref.last_rep == 0 => (IsaFeature::Sha, "sha1rnds4"),
         0xDF if pref.has_66 => (IsaFeature::Aes, "aeskeygenassist"),
         _ => (IsaFeature::Baseline, "x86-0f3a"),
     };

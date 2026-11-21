@@ -275,3 +275,93 @@ extern "C" void saxpy(const float* __restrict a, const float* __restrict b, floa
     assert!(!lowered.has_regression());
     assert!(lowered.removed_features.contains(&IsaFeature::Fma3));
 }
+
+#[test]
+fn gcc_ground_truth_verifies_sha_ni_vaes_and_vpclmulqdq() {
+    if !has_gxx() {
+        eprintln!("skipping gcc_ground_truth crypto extensions: g++ not available on PATH");
+        return;
+    }
+
+    let sha_src = r#"
+#include <immintrin.h>
+extern "C" void sha_kernel(const __m128i* a, const __m128i* b, const __m128i* c, __m128i* out) {
+    __m128i r = _mm_sha256rnds2_epu32(*a, *b, *c);
+    r = _mm_sha256msg1_epu32(r, *b);
+    *out = _mm_sha1rnds4_epu32(r, *c, 0);
+}
+"#;
+    let obj = compile_kernel("sha", sha_src, &["-msha", "-mno-avx"]);
+    let data = fs::read(&obj).unwrap();
+    let elf = ElfBinary::parse(&data).unwrap();
+    let rep = audit_binary(
+        "sha.o",
+        &elf,
+        &AuditOptions {
+            forbidden: TargetProfile::X86_64V3.forbidden_features(),
+            ..AuditOptions::default()
+        },
+    );
+    assert!(!rep.passed(), "sha.o must fail x86-64-v3 policy");
+    assert!(
+        rep.feature_counts
+            .get(&IsaFeature::Sha)
+            .copied()
+            .unwrap_or(0)
+            >= 3,
+        "expected >= 3 SHA-NI instructions, got {:?}",
+        rep.feature_counts
+    );
+    assert!(rep
+        .findings
+        .iter()
+        .any(|f| f.feature == IsaFeature::Sha && f.symbol.as_deref() == Some("sha_kernel")));
+
+    let vaes_src = r#"
+#include <immintrin.h>
+extern "C" void vaes_vpclmul_kernel(const __m256i* a, const __m256i* b, __m256i* out) {
+    __m256i x = _mm256_aesenc_epi128(*a, *b);
+    *out = _mm256_clmulepi64_epi128(x, *b, 0x00);
+}
+"#;
+    let obj = compile_kernel(
+        "vaes_vpclmul",
+        vaes_src,
+        &["-mavx2", "-mvaes", "-mvpclmulqdq"],
+    );
+    let data = fs::read(&obj).unwrap();
+    let elf = ElfBinary::parse(&data).unwrap();
+    let rep = audit_binary(
+        "vaes_vpclmul.o",
+        &elf,
+        &AuditOptions {
+            forbidden: TargetProfile::X86_64V3.forbidden_features(),
+            ..AuditOptions::default()
+        },
+    );
+    assert!(!rep.passed(), "vaes_vpclmul.o must fail x86-64-v3 policy");
+    assert!(
+        rep.feature_counts
+            .get(&IsaFeature::Vaes)
+            .copied()
+            .unwrap_or(0)
+            > 0,
+        "expected VAES instructions, got {:?}",
+        rep.feature_counts
+    );
+    assert!(
+        rep.feature_counts
+            .get(&IsaFeature::Vpclmulqdq)
+            .copied()
+            .unwrap_or(0)
+            > 0,
+        "expected VPCLMULQDQ instructions, got {:?}",
+        rep.feature_counts
+    );
+    assert!(rep.findings.iter().any(|f| {
+        f.feature == IsaFeature::Vaes && f.symbol.as_deref() == Some("vaes_vpclmul_kernel")
+    }));
+    assert!(rep.findings.iter().any(|f| {
+        f.feature == IsaFeature::Vpclmulqdq && f.symbol.as_deref() == Some("vaes_vpclmul_kernel")
+    }));
+}
