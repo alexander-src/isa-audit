@@ -1,6 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs;
-use std::process::Command;
 
 use isa_audit::analyzer::{audit_input, AuditOptions};
 use isa_audit::archive::{is_archive, Archive, ArchiveError, ARCHIVE_MAGIC, THIN_ARCHIVE_MAGIC};
@@ -236,6 +234,9 @@ fn byte_by_byte_truncation_never_panics() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn cli_scans_checks_and_diffs_real_gcc_ar_static_libraries() {
+    use std::fs;
+    use std::process::Command;
+
     let has_gpp = Command::new("g++").arg("--version").output().is_ok();
     let has_ar = Command::new("ar").arg("--version").output().is_ok();
     if !has_gpp || !has_ar {
