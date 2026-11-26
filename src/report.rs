@@ -47,6 +47,9 @@ pub fn render_text(report: &AuditReport, top_n: usize) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "isa-audit report: {}", report.path);
     let _ = writeln!(out, "  min-profile   : {}", report.min_profile);
+    if !report.members_scanned.is_empty() {
+        let _ = writeln!(out, "  members       : {}", report.members_scanned.len());
+    }
     let _ = writeln!(
         out,
         "  sections      : {} ({} bytes decoded, {} instructions, {} recovery steps)",
@@ -95,9 +98,13 @@ pub fn render_text(report: &AuditReport, top_n: usize) -> String {
             report.total_violations
         );
         for f in report.findings.iter().take(shown) {
-            let loc = match &f.symbol {
+            let base_loc = match &f.symbol {
                 Some(sym) => format!("{sym}+0x{:x}", f.symbol_offset),
                 None => format!("{}@0x{:x}", f.section, f.vaddr),
+            };
+            let loc = match &f.member {
+                Some(member) => format!("{member}:{base_loc}"),
+                None => base_loc,
             };
             let _ = writeln!(
                 out,
@@ -147,6 +154,15 @@ pub fn render_json(report: &AuditReport) -> String {
     let _ = writeln!(out, "  \"invalid_steps\": {},", report.invalid_steps);
     let _ = writeln!(out, "  \"total_violations\": {},", report.total_violations);
 
+    out.push_str("  \"members_scanned\": [");
+    for (idx, m) in report.members_scanned.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&json_escape(m));
+    }
+    out.push_str("],\n");
+
     out.push_str("  \"forbidden_policy\": [");
     for (idx, f) in report.forbidden_policy.iter().enumerate() {
         if idx > 0 {
@@ -171,13 +187,18 @@ pub fn render_json(report: &AuditReport) -> String {
         } else {
             ""
         };
+        let member_json = match &f.member {
+            Some(m) => json_escape(m),
+            None => "null".to_string(),
+        };
         let sym_json = match &f.symbol {
             Some(s) => json_escape(s),
             None => "null".to_string(),
         };
         let _ = writeln!(
             out,
-            "    {{\"feature\": {}, \"mnemonic\": {}, \"section\": {}, \"vaddr\": {}, \"symbol\": {}, \"symbol_offset\": {}, \"bytes\": {}}}{comma}",
+            "    {{\"member\": {}, \"feature\": {}, \"mnemonic\": {}, \"section\": {}, \"vaddr\": {}, \"symbol\": {}, \"symbol_offset\": {}, \"bytes\": {}}}{comma}",
+            member_json,
             json_escape(f.feature.id()),
             json_escape(f.mnemonic),
             json_escape(&f.section),
@@ -217,16 +238,19 @@ pub fn render_sarif(report: &AuditReport) -> String {
             ""
         };
         let rule_id = format!("isa-audit/forbidden-{}", f.feature.id());
+        let loc_part = match &f.member {
+            Some(m) => format!("{m}:{}", f.section),
+            None => f.section.clone(),
+        };
         let sym_part = match &f.symbol {
             Some(s) => format!(" in {s}+0x{:x}", f.symbol_offset),
             None => String::new(),
         };
         let msg = format!(
-            "Forbidden {} instruction ({}) at 0x{:x} ({}{sym_part}) [{}]",
+            "Forbidden {} instruction ({}) at 0x{:x} ({loc_part}{sym_part}) [{}]",
             f.feature.label(),
             f.mnemonic,
             f.vaddr,
-            f.section,
             hex_bytes(&f.bytes)
         );
         let _ = writeln!(out, "        {{");

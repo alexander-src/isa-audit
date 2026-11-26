@@ -7,8 +7,7 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Instant;
 
-use isa_audit::analyzer::{audit_binary, diff_reports, AuditOptions};
-use isa_audit::elf::ElfBinary;
+use isa_audit::analyzer::{audit_input, diff_reports, AuditOptions};
 use isa_audit::isa::{parse_feature_list, IsaFeature, TargetProfile};
 use isa_audit::report::{
     render_diff_json, render_diff_text, render_json, render_sarif, render_text, ReportFormat,
@@ -16,16 +15,16 @@ use isa_audit::report::{
 
 fn usage() -> &'static str {
     "\
-isa-audit: x86-64 ELF64 binary ISA feature auditor and CI gate
+isa-audit: x86-64 ELF64 binary and Unix .a archive ISA feature auditor and CI gate
 
 USAGE:
-  isa-audit scan  <binary> [--format text|json|sarif] [--section NAME] [--top N]
-  isa-audit check <binary> [--target PROFILE] [--forbid FEAT,...]
-                           [--format text|json|sarif] [--section NAME]
-                           [--max-findings N] [--top N]
+  isa-audit scan  <binary|archive.a> [--format text|json|sarif] [--section NAME] [--top N]
+  isa-audit check <binary|archive.a> [--target PROFILE] [--forbid FEAT,...]
+                                     [--format text|json|sarif] [--section NAME]
+                                     [--max-findings N] [--top N]
   isa-audit diff  <before> <after> [--format text|json] [--section NAME]
-                           [--fail-on-regression]
-  isa-audit bench <binary> [--iterations N]
+                                   [--fail-on-regression]
+  isa-audit bench <binary|archive.a> [--iterations N]
 
 PROFILES:
   x86-64-v1   Baseline x86-64 (SSE/SSE2)
@@ -37,7 +36,7 @@ PROFILES:
 EXIT CODES:
   0  Scan succeeded / binary complies with ISA policy / no ISA regression
   1  Policy check failed or --fail-on-regression detected newly added ISA extensions
-  2  CLI argument, I/O, or ELF parse error
+  2  CLI argument, I/O, archive, or ELF parse error
 "
 }
 
@@ -135,15 +134,13 @@ fn run() -> Result<ExitCode, String> {
 
             let raw = fs::read(&binary_path)
                 .map_err(|e| format!("failed to read '{binary_path}': {e}"))?;
-            let elf = ElfBinary::parse(&raw)
-                .map_err(|e| format!("failed to parse ELF '{binary_path}': {e}"))?;
 
             let opts = AuditOptions {
                 section_filter,
                 forbidden,
                 max_findings,
             };
-            let report = audit_binary(&binary_path, &elf, &opts);
+            let report = audit_input(&binary_path, &raw, &opts)?;
 
             let rendered = match format {
                 ReportFormat::Text => render_text(&report, top_n),
@@ -203,17 +200,13 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("failed to read '{before_path}': {e}"))?;
             let after_raw =
                 fs::read(after_path).map_err(|e| format!("failed to read '{after_path}': {e}"))?;
-            let before_elf = ElfBinary::parse(&before_raw)
-                .map_err(|e| format!("failed to parse ELF '{before_path}': {e}"))?;
-            let after_elf = ElfBinary::parse(&after_raw)
-                .map_err(|e| format!("failed to parse ELF '{after_path}': {e}"))?;
 
             let opts = AuditOptions {
                 section_filter,
                 ..AuditOptions::default()
             };
-            let before_rep = audit_binary(before_path, &before_elf, &opts);
-            let after_rep = audit_binary(after_path, &after_elf, &opts);
+            let before_rep = audit_input(before_path, &before_raw, &opts)?;
+            let after_rep = audit_input(after_path, &after_raw, &opts)?;
             let diff = diff_reports(&before_rep, &after_rep);
 
             let rendered = match format {
@@ -260,18 +253,16 @@ fn run() -> Result<ExitCode, String> {
                 path.ok_or_else(|| "missing <binary> argument for 'bench'".to_string())?;
             let raw = fs::read(&binary_path)
                 .map_err(|e| format!("failed to read '{binary_path}': {e}"))?;
-            let elf = ElfBinary::parse(&raw)
-                .map_err(|e| format!("failed to parse ELF '{binary_path}': {e}"))?;
 
             let opts = AuditOptions::default();
             // Warmup pass
-            let warmup = audit_binary(&binary_path, &elf, &opts);
+            let warmup = audit_input(&binary_path, &raw, &opts)?;
 
             let start = Instant::now();
             let mut total_insns = 0u64;
             let mut total_bytes = 0usize;
             for _ in 0..iterations {
-                let r = audit_binary(&binary_path, &elf, &opts);
+                let r = audit_input(&binary_path, &raw, &opts)?;
                 total_insns += r.total_instructions;
                 total_bytes += r.total_bytes_scanned;
             }

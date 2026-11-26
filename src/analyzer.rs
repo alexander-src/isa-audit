@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::archive::{is_archive, Archive};
 use crate::decoder::decode_one;
 use crate::elf::{ElfBinary, ExecSection};
 use crate::isa::{infer_min_profile, IsaFeature};
@@ -25,9 +26,10 @@ impl Default for AuditOptions {
     }
 }
 
-/// A single instruction finding attributed to section, virtual address, and optional symbol.
+/// A single instruction finding attributed to optional archive member, section, virtual address, and optional symbol.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
+    pub member: Option<String>,
     pub feature: IsaFeature,
     pub mnemonic: &'static str,
     pub section: String,
@@ -47,10 +49,11 @@ pub struct SectionSummary {
     pub invalid_steps: u64,
 }
 
-/// Complete result of auditing an x86-64 ELF64 binary.
+/// Complete result of auditing an x86-64 ELF64 binary or Unix `.a` static archive.
 #[derive(Debug, Clone)]
 pub struct AuditReport {
     pub path: String,
+    pub members_scanned: Vec<String>,
     pub sections_scanned: Vec<SectionSummary>,
     pub total_bytes_scanned: usize,
     pub total_instructions: u64,
@@ -156,25 +159,18 @@ pub fn audit_binary(
     let mut total_violations = 0u64;
     let mut findings = Vec::new();
 
-    for sec in &elf.exec_sections {
-        if let Some(ref filter) = opts.section_filter {
-            if sec.name != *filter {
-                continue;
-            }
-        }
-        let summary = scan_section(
-            elf,
-            sec,
-            opts,
-            &mut feature_counts,
-            &mut total_violations,
-            &mut findings,
-        );
-        total_bytes_scanned += summary.size;
-        total_instructions += summary.instructions;
-        invalid_steps += summary.invalid_steps;
-        sections_scanned.push(summary);
-    }
+    scan_elf_into(
+        None,
+        elf,
+        opts,
+        &mut sections_scanned,
+        &mut total_bytes_scanned,
+        &mut total_instructions,
+        &mut invalid_steps,
+        &mut feature_counts,
+        &mut total_violations,
+        &mut findings,
+    );
 
     let observed: BTreeSet<IsaFeature> = feature_counts.keys().copied().collect();
     let min_profile = infer_min_profile(&observed);
@@ -182,6 +178,7 @@ pub fn audit_binary(
 
     AuditReport {
         path: path.into(),
+        members_scanned: Vec::new(),
         sections_scanned,
         total_bytes_scanned,
         total_instructions,
@@ -195,7 +192,125 @@ pub fn audit_binary(
     }
 }
 
+/// Runs a full ISA audit across all ELF64 x86-64 object members in a Unix `.a` archive.
+pub fn audit_archive(
+    path: impl Into<String>,
+    archive: &Archive<'_>,
+    opts: &AuditOptions,
+) -> Result<AuditReport, String> {
+    let path_str = path.into();
+    let mut members_scanned = Vec::new();
+    let mut sections_scanned = Vec::new();
+    let mut total_bytes_scanned = 0usize;
+    let mut total_instructions = 0u64;
+    let mut invalid_steps = 0u64;
+    let mut feature_counts: BTreeMap<IsaFeature, u64> = BTreeMap::new();
+    let mut total_violations = 0u64;
+    let mut findings = Vec::new();
+
+    for member in &archive.members {
+        if !member.data.starts_with(b"\x7fELF") {
+            continue;
+        }
+        let elf = ElfBinary::parse(member.data).map_err(|e| {
+            format!(
+                "failed to parse ELF member '{}' in '{path_str}': {e}",
+                member.name
+            )
+        })?;
+        members_scanned.push(member.name.clone());
+        scan_elf_into(
+            Some(member.name.as_str()),
+            &elf,
+            opts,
+            &mut sections_scanned,
+            &mut total_bytes_scanned,
+            &mut total_instructions,
+            &mut invalid_steps,
+            &mut feature_counts,
+            &mut total_violations,
+            &mut findings,
+        );
+    }
+
+    let observed: BTreeSet<IsaFeature> = feature_counts.keys().copied().collect();
+    let min_profile = infer_min_profile(&observed);
+    let violations_truncated = (findings.len() as u64) < total_violations;
+
+    Ok(AuditReport {
+        path: path_str,
+        members_scanned,
+        sections_scanned,
+        total_bytes_scanned,
+        total_instructions,
+        invalid_steps,
+        feature_counts,
+        min_profile,
+        forbidden_policy: opts.forbidden.clone(),
+        total_violations,
+        violations_truncated,
+        findings,
+    })
+}
+
+/// Detects whether raw bytes are a Unix `.a` archive or standalone ELF64 binary and audits them.
+pub fn audit_input(
+    path: impl Into<String>,
+    raw: &[u8],
+    opts: &AuditOptions,
+) -> Result<AuditReport, String> {
+    let path_str = path.into();
+    if is_archive(raw) {
+        let archive = Archive::parse(raw)
+            .map_err(|e| format!("failed to parse archive '{path_str}': {e}"))?;
+        audit_archive(path_str, &archive, opts)
+    } else {
+        let elf =
+            ElfBinary::parse(raw).map_err(|e| format!("failed to parse ELF '{path_str}': {e}"))?;
+        Ok(audit_binary(path_str, &elf, opts))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_elf_into(
+    member: Option<&str>,
+    elf: &ElfBinary<'_>,
+    opts: &AuditOptions,
+    sections_scanned: &mut Vec<SectionSummary>,
+    total_bytes_scanned: &mut usize,
+    total_instructions: &mut u64,
+    invalid_steps: &mut u64,
+    feature_counts: &mut BTreeMap<IsaFeature, u64>,
+    total_violations: &mut u64,
+    findings: &mut Vec<Finding>,
+) {
+    for sec in &elf.exec_sections {
+        if let Some(ref filter) = opts.section_filter {
+            if sec.name != *filter {
+                continue;
+            }
+        }
+        let mut summary = scan_section(
+            member,
+            elf,
+            sec,
+            opts,
+            feature_counts,
+            total_violations,
+            findings,
+        );
+        if let Some(member_name) = member {
+            summary.name = format!("{member_name}:{}", summary.name);
+        }
+        *total_bytes_scanned += summary.size;
+        *total_instructions += summary.instructions;
+        *invalid_steps += summary.invalid_steps;
+        sections_scanned.push(summary);
+    }
+}
+
 fn scan_section(
+    member: Option<&str>,
     elf: &ElfBinary<'_>,
     sec: &ExecSection<'_>,
     opts: &AuditOptions,
@@ -266,6 +381,7 @@ fn scan_section(
                         };
                         let end = (pos + step).min(range_end);
                         findings.push(Finding {
+                            member: member.map(str::to_string),
                             feature: insn.feature,
                             mnemonic: insn.mnemonic,
                             section: sec.name.clone(),

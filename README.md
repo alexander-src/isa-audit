@@ -8,15 +8,16 @@ Static x86-64 ELF64 instruction auditor written in safe Rust with zero dependenc
 
 A single stray `FMA3` or `AVX2` instruction inside a rarely hit error path crashes older x86-64 CPUs with `SIGILL` in production. Running tests only exercises code paths that actually execute.
 
-`isa-audit` scans every executable ELF section (`SHF_EXECINSTR`), resyncs at `STT_FUNC` symbol boundaries, decodes legacy, REX, VEX, and EVEX encodings, and prints the exact virtual address, symbol offset, and raw bytes of any forbidden instruction.
+`isa-audit` scans every executable ELF section (`SHF_EXECINSTR`) in ELF64 binaries, shared objects, `.o` object files, and Unix `ar` (`.a`) static archives, resyncs at `STT_FUNC` symbol boundaries, decodes legacy, REX, VEX, and EVEX encodings, and prints the exact archive member (if any), virtual address, symbol offset, and raw bytes of any forbidden instruction.
 
 ## Usage
 
-Grab a binary from [Releases](https://github.com/alexander-src/isa-audit/releases), or build from source (`cargo build --release`, ~1s offline, 427 KB stripped):
+Grab a binary from [Releases](https://github.com/alexander-src/isa-audit/releases), or build from source (`cargo build --release`, ~1s offline):
 
 ```bash
-# Inspect all ISA extensions used in an ELF64 binary
+# Inspect all ISA extensions used in an ELF64 binary or .a static archive
 isa-audit scan /path/to/binary
+isa-audit scan ./build/libvendor.a
 
 # Fail CI if any instruction exceeds a target profile
 isa-audit check ./build/app --target avx-no-fma
@@ -28,7 +29,7 @@ isa-audit diff ./build/before.elf ./build/after.elf --fail-on-regression
 isa-audit check ./build/app --forbid fma3,avx2,avx512 --format sarif > isa.sarif
 ```
 
-Exit codes: `0` pass, `1` policy violation, `2` I/O or malformed ELF error.
+Exit codes: `0` pass, `1` policy violation, `2` I/O, archive, or malformed ELF error.
 
 ## Profiles
 
@@ -53,7 +54,7 @@ Single-threaded release build on Linux x86-64 (100 iterations, 0 recovery steps)
 
 - Static scan only: cannot inspect JITed, encrypted, or self-modifying code.
 - Inline data tables placed inside `.text` without symbol markers can trigger byte-step resynchronization.
-- x86-64 ELF64 only (no PE, Mach-O, ARM64, or `.a` static archives yet).
+- x86-64 ELF64 and standard Unix `ar` (`.a`) archives only (no PE, Mach-O, ARM64, or GNU thin `!<thin>` archives yet).
 
 ## License
 
