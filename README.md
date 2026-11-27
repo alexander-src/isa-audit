@@ -25,8 +25,11 @@ isa-audit check ./build/app --target avx-no-fma
 # Fail CI if a new build introduces ISA extensions not present in the old build
 isa-audit diff ./build/before.elf ./build/after.elf --fail-on-regression
 
+# Emit a Markdown summary table (useful for GitHub Actions $GITHUB_STEP_SUMMARY)
+isa-audit diff ./build/before.elf ./build/after.elf --format markdown --out summary.md
+
 # Forbid specific extensions and emit GitHub Code Scanning SARIF (or JSON)
-isa-audit check ./build/app --forbid fma3,avx2,avx512 --format sarif > isa.sarif
+isa-audit check ./build/app --forbid fma3,avx2,avx512 --format sarif --out isa.sarif
 ```
 
 Exit codes: `0` pass, `1` policy violation, `2` I/O, archive, or malformed ELF error.
