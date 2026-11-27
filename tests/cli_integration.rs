@@ -197,6 +197,88 @@ fn cli_diff_detects_isa_lowering_and_regressions() {
     let _ = fs::remove_file(&avx_fma);
 }
 
+#[test]
+fn cli_markdown_format_and_out_flag_work_for_scan_check_and_diff() {
+    let bin = env!("CARGO_BIN_EXE_isa-audit");
+    let pid = std::process::id();
+    let avx_only = std::env::temp_dir().join(format!("isa_audit_md_avx_{pid}.elf"));
+    let avx_fma = std::env::temp_dir().join(format!("isa_audit_md_fma_{pid}.elf"));
+    let check_md = std::env::temp_dir().join(format!("isa_audit_check_{pid}.md"));
+    let diff_md = std::env::temp_dir().join(format!("isa_audit_diff_{pid}.md"));
+
+    fs::write(
+        &avx_only,
+        build_minimal_elf(&[0xc5, 0xf4, 0x58, 0xc2, 0xc3]),
+    )
+    .expect("write avx fixture");
+    fs::write(
+        &avx_fma,
+        build_minimal_elf(&[0xc4, 0xe2, 0x71, 0xa8, 0xc2, 0xc5, 0xf4, 0x58, 0xc2, 0xc3]),
+    )
+    .expect("write fma fixture");
+
+    // 1. scan --format md prints Markdown table to stdout.
+    let scan = Command::new(bin)
+        .args(["scan", avx_only.to_str().unwrap(), "--format", "md"])
+        .output()
+        .expect("run isa-audit scan md");
+    assert_eq!(scan.status.code(), Some(0));
+    let scan_out = String::from_utf8_lossy(&scan.stdout);
+    assert!(scan_out.contains("### isa-audit:"));
+    assert!(scan_out.contains("| Feature | Count | Status |"));
+    assert!(scan_out.contains("| AVX | 1 | ok |"));
+
+    // 2. check --format markdown --out <file> writes Markdown report and exits 1 on policy fail.
+    let check = Command::new(bin)
+        .args([
+            "check",
+            avx_only.to_str().unwrap(),
+            "--target",
+            "x86-64-v2",
+            "--format",
+            "markdown",
+            "--out",
+            check_md.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run isa-audit check md --out");
+    assert_eq!(check.status.code(), Some(1));
+    assert!(
+        check.stdout.is_empty(),
+        "stdout should stay empty when --out is set"
+    );
+    let check_content = fs::read_to_string(&check_md).expect("read check md");
+    assert!(check_content.contains("**FAIL**"));
+    assert!(check_content.contains("| AVX | 1 | FORBIDDEN |"));
+    assert!(check_content.contains("`0x000000401000`"));
+
+    // 3. diff --format markdown --out <file> --fail-on-regression writes Markdown diff table and exits 1.
+    let diff = Command::new(bin)
+        .args([
+            "diff",
+            avx_only.to_str().unwrap(),
+            avx_fma.to_str().unwrap(),
+            "--format",
+            "markdown",
+            "--out",
+            diff_md.to_str().unwrap(),
+            "--fail-on-regression",
+        ])
+        .output()
+        .expect("run isa-audit diff md --out");
+    assert_eq!(diff.status.code(), Some(1));
+    assert!(diff.stdout.is_empty());
+    let diff_content = fs::read_to_string(&diff_md).expect("read diff md");
+    assert!(diff_content.contains("### isa-audit diff"));
+    assert!(diff_content.contains("`avx-no-fma` -> `x86-64-v3`"));
+    assert!(diff_content.contains("| FMA3 | 0 | 1 | +1 | ADDED |"));
+
+    let _ = fs::remove_file(&avx_only);
+    let _ = fs::remove_file(&avx_fma);
+    let _ = fs::remove_file(&check_md);
+    let _ = fs::remove_file(&diff_md);
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn cli_self_scan_verifies_linux_x86_64_binary_is_baseline() {

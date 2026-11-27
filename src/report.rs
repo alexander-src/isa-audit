@@ -9,6 +9,7 @@ pub enum ReportFormat {
     Text,
     Json,
     Sarif,
+    Markdown,
 }
 
 fn hex_bytes(bytes: &[u8]) -> String {
@@ -401,5 +402,159 @@ pub fn render_diff_json(diff: &DiffReport) -> String {
     }
     out.push_str("  ]\n");
     out.push_str("}\n");
+    out
+}
+
+fn md_escape(s: &str) -> String {
+    s.replace('|', "\\|")
+}
+
+/// Renders a GitHub-flavored Markdown report suitable for PR comments or `$GITHUB_STEP_SUMMARY`.
+pub fn render_markdown(report: &AuditReport, top_n: usize) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "### isa-audit: `{}`\n", md_escape(&report.path));
+
+    let mut summary = format!(
+        "- Minimum profile: `{}`\n- Scanned: {} section(s), {} bytes, {} instructions ({} recovery steps)\n",
+        report.min_profile,
+        report.sections_scanned.len(),
+        report.total_bytes_scanned,
+        report.total_instructions,
+        report.invalid_steps
+    );
+    if !report.members_scanned.is_empty() {
+        let _ = writeln!(
+            summary,
+            "- Archive members: {}",
+            report.members_scanned.len()
+        );
+    }
+    if !report.forbidden_policy.is_empty() {
+        let status = if report.passed() { "PASS" } else { "FAIL" };
+        let forbidden_list: Vec<&str> = report.forbidden_policy.iter().map(|f| f.id()).collect();
+        let _ = writeln!(
+            summary,
+            "- Policy status: **{status}** (forbid: `{}`, violations: {})",
+            forbidden_list.join(", "),
+            report.total_violations
+        );
+    }
+    out.push_str(&summary);
+    out.push('\n');
+
+    let _ = writeln!(out, "| Feature | Count | Status |");
+    let _ = writeln!(out, "| --- | ---: | --- |");
+
+    let mut rows: Vec<(IsaFeature, u64)> = report
+        .feature_counts
+        .iter()
+        .map(|(&f, &c)| (f, c))
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    for (feat, count) in rows {
+        let tag = if report.forbidden_policy.contains(&feat) {
+            "FORBIDDEN"
+        } else {
+            "ok"
+        };
+        let _ = writeln!(out, "| {} | {} | {} |", feat.label(), count, tag);
+    }
+
+    if !report.findings.is_empty() {
+        let shown = report.findings.len().min(top_n);
+        let _ = writeln!(
+            out,
+            "\n#### Forbidden Instruction Sites (showing {shown} of {})\n",
+            report.total_violations
+        );
+        let _ = writeln!(out, "| Address | Feature | Mnemonic | Location | Bytes |");
+        let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
+        for f in report.findings.iter().take(shown) {
+            let base_loc = match &f.symbol {
+                Some(sym) => format!("{sym}+0x{:x}", f.symbol_offset),
+                None => format!("{}@0x{:x}", f.section, f.vaddr),
+            };
+            let loc = match &f.member {
+                Some(member) => format!("{member}:{base_loc}"),
+                None => base_loc,
+            };
+            let _ = writeln!(
+                out,
+                "| `0x{:012x}` | {} | `{}` | `{}` | `{}` |",
+                f.vaddr,
+                f.feature.label(),
+                f.mnemonic,
+                md_escape(&loc),
+                hex_bytes(&f.bytes)
+            );
+        }
+        if report.violations_truncated || shown < report.findings.len() {
+            let _ = writeln!(
+                out,
+                "\n_{} additional violation(s) omitted; increase `--max-findings` to inspect._",
+                report.total_violations.saturating_sub(shown as u64)
+            );
+        }
+    }
+
+    out
+}
+
+/// Renders a GitHub-flavored Markdown diff table between two audited binaries.
+pub fn render_diff_markdown(diff: &DiffReport) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "### isa-audit diff\n");
+    let _ = writeln!(
+        out,
+        "- Before: `{}` (`{}`, {} instructions)",
+        md_escape(&diff.before_path),
+        diff.before_min_profile,
+        diff.before_instructions
+    );
+    let _ = writeln!(
+        out,
+        "- After: `{}` (`{}`, {} instructions)",
+        md_escape(&diff.after_path),
+        diff.after_min_profile,
+        diff.after_instructions
+    );
+    let _ = writeln!(
+        out,
+        "- Minimum profile: `{}` -> `{}`",
+        diff.before_min_profile, diff.after_min_profile
+    );
+    if !diff.added_features.is_empty() {
+        let added: Vec<&str> = diff.added_features.iter().map(|f| f.label()).collect();
+        let _ = writeln!(out, "- Added features: {}", added.join(", "));
+    }
+    if !diff.removed_features.is_empty() {
+        let removed: Vec<&str> = diff.removed_features.iter().map(|f| f.label()).collect();
+        let _ = writeln!(out, "- Removed features: {}", removed.join(", "));
+    }
+
+    let _ = writeln!(out, "\n| Feature | Before | After | Delta | Status |");
+    let _ = writeln!(out, "| --- | ---: | ---: | ---: | --- |");
+    for row in &diff.deltas {
+        let status = if diff.added_features.contains(&row.feature) {
+            "ADDED"
+        } else if diff.removed_features.contains(&row.feature) {
+            "REMOVED"
+        } else if row.delta != 0 {
+            "changed"
+        } else {
+            "same"
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {:+} | {} |",
+            row.feature.label(),
+            row.before,
+            row.after,
+            row.delta,
+            status
+        );
+    }
+
     out
 }

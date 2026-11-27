@@ -10,7 +10,8 @@ use std::time::Instant;
 use isa_audit::analyzer::{audit_input, diff_reports, AuditOptions};
 use isa_audit::isa::{parse_feature_list, IsaFeature, TargetProfile};
 use isa_audit::report::{
-    render_diff_json, render_diff_text, render_json, render_sarif, render_text, ReportFormat,
+    render_diff_json, render_diff_markdown, render_diff_text, render_json, render_markdown,
+    render_sarif, render_text, ReportFormat,
 };
 
 fn usage() -> &'static str {
@@ -18,12 +19,13 @@ fn usage() -> &'static str {
 isa-audit: x86-64 ELF64 binary and Unix .a archive ISA feature auditor and CI gate
 
 USAGE:
-  isa-audit scan  <binary|archive.a> [--format text|json|sarif] [--section NAME] [--top N]
+  isa-audit scan  <binary|archive.a> [--format text|json|sarif|markdown] [--out FILE]
+                                     [--section NAME] [--top N]
   isa-audit check <binary|archive.a> [--target PROFILE] [--forbid FEAT,...]
-                                     [--format text|json|sarif] [--section NAME]
-                                     [--max-findings N] [--top N]
-  isa-audit diff  <before> <after> [--format text|json] [--section NAME]
-                                   [--fail-on-regression]
+                                     [--format text|json|sarif|markdown] [--out FILE]
+                                     [--section NAME] [--max-findings N] [--top N]
+  isa-audit diff  <before> <after> [--format text|json|markdown] [--out FILE]
+                                   [--section NAME] [--fail-on-regression]
   isa-audit bench <binary|archive.a> [--iterations N]
 
 PROFILES:
@@ -45,10 +47,20 @@ fn parse_format(val: &str) -> Result<ReportFormat, String> {
         "text" => Ok(ReportFormat::Text),
         "json" => Ok(ReportFormat::Json),
         "sarif" => Ok(ReportFormat::Sarif),
+        "markdown" | "md" => Ok(ReportFormat::Markdown),
         other => Err(format!(
-            "unsupported --format '{other}' (expected text, json, or sarif)"
+            "unsupported --format '{other}' (expected text, json, sarif, or markdown)"
         )),
     }
+}
+
+fn write_output(out_path: Option<&str>, rendered: &str) -> Result<(), String> {
+    if let Some(path) = out_path {
+        fs::write(path, rendered).map_err(|e| format!("failed to write '{path}': {e}"))?;
+    } else {
+        print!("{rendered}");
+    }
+    Ok(())
 }
 
 fn next_arg(args: &[String], idx: &mut usize, flag: &str) -> Result<String, String> {
@@ -74,6 +86,7 @@ fn run() -> Result<ExitCode, String> {
         "scan" | "check" => {
             let mut path: Option<String> = None;
             let mut format = ReportFormat::Text;
+            let mut out_path: Option<String> = None;
             let mut section_filter: Option<String> = None;
             let mut forbidden: BTreeSet<IsaFeature> = BTreeSet::new();
             let mut max_findings: usize = 50;
@@ -85,6 +98,9 @@ fn run() -> Result<ExitCode, String> {
                     "--format" | "-f" => {
                         let v = next_arg(&args, &mut i, "--format")?;
                         format = parse_format(&v)?;
+                    }
+                    "--out" | "-o" => {
+                        out_path = Some(next_arg(&args, &mut i, "--out")?);
                     }
                     "--section" | "-s" => {
                         section_filter = Some(next_arg(&args, &mut i, "--section")?);
@@ -146,8 +162,9 @@ fn run() -> Result<ExitCode, String> {
                 ReportFormat::Text => render_text(&report, top_n),
                 ReportFormat::Json => render_json(&report),
                 ReportFormat::Sarif => render_sarif(&report),
+                ReportFormat::Markdown => render_markdown(&report, top_n),
             };
-            print!("{rendered}");
+            write_output(out_path.as_deref(), &rendered)?;
 
             if cmd == "check" && !report.passed() {
                 Ok(ExitCode::from(1))
@@ -158,6 +175,7 @@ fn run() -> Result<ExitCode, String> {
         "diff" => {
             let mut paths: Vec<String> = Vec::new();
             let mut format = ReportFormat::Text;
+            let mut out_path: Option<String> = None;
             let mut section_filter: Option<String> = None;
             let mut fail_on_regression = false;
 
@@ -167,6 +185,9 @@ fn run() -> Result<ExitCode, String> {
                     "--format" | "-f" => {
                         let v = next_arg(&args, &mut i, "--format")?;
                         format = parse_format(&v)?;
+                    }
+                    "--out" | "-o" => {
+                        out_path = Some(next_arg(&args, &mut i, "--out")?);
                     }
                     "--section" | "-s" => {
                         section_filter = Some(next_arg(&args, &mut i, "--section")?);
@@ -191,7 +212,9 @@ fn run() -> Result<ExitCode, String> {
                 return Err("diff requires two arguments: <before> <after>".to_string());
             }
             if format == ReportFormat::Sarif {
-                return Err("diff supports --format text or json (not sarif)".to_string());
+                return Err(
+                    "diff supports --format text, json, or markdown (not sarif)".to_string()
+                );
             }
 
             let before_path = &paths[0];
@@ -212,9 +235,10 @@ fn run() -> Result<ExitCode, String> {
             let rendered = match format {
                 ReportFormat::Text => render_diff_text(&diff),
                 ReportFormat::Json => render_diff_json(&diff),
+                ReportFormat::Markdown => render_diff_markdown(&diff),
                 ReportFormat::Sarif => unreachable!(),
             };
-            print!("{rendered}");
+            write_output(out_path.as_deref(), &rendered)?;
 
             if fail_on_regression && diff.has_regression() {
                 Ok(ExitCode::from(1))
